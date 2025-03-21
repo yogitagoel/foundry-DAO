@@ -1,82 +1,41 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.18;
+pragma solidity ^0.8.19;
 
-import {Test} from "forge-std/Test.sol";
-import {MyGovernor} from "../src/MyGovernor.sol";
-import {Box} from "../src/Box.sol";
-import {Timelock} from "../src/Timelock.sol";
-import {GovToken} from "../src/GovToken.sol";
+import {DeployBox} from "../script/DeployBox.s.sol";
+import {UpgradeBox} from "../script/UpgradeBox.s.sol";
+import {Test, console} from "../lib/forge-std/src/Test.sol";
+import {ERC1967Proxy} from "../lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {BoxV1} from "../src/BoxV1.sol";
+import {BoxV2} from "../src/BoxV2.sol";
 
-abstract contract IGovernor is IERC165 {
-    enum ProposalState {
-        Pending,
-        Active,
-        Canceled,
-        Defeated,
-        Succeeded,
-        Queued,
-        Expired,
-        Executed
-    }
-    
-contract MyGovernorTest is Test {
-    MyGovernor governor;
-    Box box;
-    Timelock timelock;
-    GovToken govToken;
+contract DeployAndUpgradeTest is Test {
+    DeployBox public deployer;
+    UpgradeBox public upgrader;
+    address public OWNER = makeAddr("owner");
 
-    address public USER = makeAddr("user");
-    uint256 public constant INITIAL_SUPPLY = 100 ether;
-
-    uint256 public constant MIN_DELAY = 3600; // 1 hour after a vote passes
-    address[] proposers;
-    address[] executors;
+    address public proxy;
 
     function setUp() public {
-        govToken = new GovToken();
-        govToken.mint(USER, INITIAL_SUPPLY);
-
-        box = new Box();
-        box.transferOwnership(address(timelock));
-
-        vm.startPrank(USER);
-        govToken.delegate(USER);
-        timelock = new Timelock(MIN_DELAY, proposers, executors);
-        governor = new MyGovernor(govToken, timelock);
-
-        bytes32 proposerRole = timelock.PROPOSER_ROLE();
-        bytes32 executorRole = timelock.EXECUTOR_ROLE();
-        bytes32 adminRole = timelock.TIMELOCK_ADMIN_ROLE();
-
-        timelock.grantRole(proposerRole, address(governor));
-        timelock.grantRole(executorRole, address(0));
-        timelock.revokeRole(adminRole, USER);
-        vm.stopPrank();
+        deployer = new DeployBox();
+        upgrader = new UpgradeBox();
+        proxy = deployer.run();
     }
-
-    function testCantUpdateBoxWithoutGovernance() public {
+    function testProxyStartsAsBoxV1() public {
         vm.expectRevert();
-        box.store(1);
+        BoxV2(proxy).setNumber(7);
     }
 
-    function testGovernanceUpdatesBox() public {
-        uint256 valueToStore = 420;
-        string memory description = "Update box value to 420 for clout";
-        bytes memory encodedFunctionCall = abi.encodeWithSignature(
-            "store(uint256)",
-            valueToStore
-        );
+    function testUpgrades() public{
+        BoxV2 box2 = new BoxV2();
 
-        calldatas.push(encodedFunctionCall);
-        values.push(0);
-        targets.push(address(box));
+        address proxy = upgrader.upgradeBox(proxy, address(box2));
 
-        uint256 proposalId = governor.propose(
-            targets,
-            values,
-            calldatas,
-            description
-        );
+        uint256 expectedValue = 2;
+        assertEq(expectedValue, BoxV2(proxy).version());
+
+        BoxV2(proxy).setNumber(7);
+        assertEq(7, BoxV2(proxy).getNumber());
+
     }
 }
